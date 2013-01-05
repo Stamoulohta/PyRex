@@ -25,6 +25,8 @@ from PyRexPorts import *
 
 re = RELib.__subclasses__()[0]()
 
+COLORS =[QtGui.QColor("Red"), QtGui.QColor("Blue")]
+
 class PyRexPainter(QtGui.QTextCursor): # Not using QSyntaxHighlighter due to the need of multiline text blocks.
     def __init__(self, reditor, doc):
         super(PyRexPainter, self).__init__(doc)
@@ -35,8 +37,8 @@ class PyRexPainter(QtGui.QTextCursor): # Not using QSyntaxHighlighter due to the
     def initColorscheme(self):
         self.default = QtGui.QTextCharFormat()
         self.pallete=[QtGui.QTextCharFormat() for i in range(2)]
-        self.pallete[0].setBackground(QtGui.QColor("Red"))
-        self.pallete[1].setBackground(QtGui.QColor("Blue"))
+        self.pallete[0].setBackground(COLORS[0])
+        self.pallete[1].setBackground(COLORS[1])
 
     def highlight(self):
         self.unFormat()
@@ -46,6 +48,7 @@ class PyRexPainter(QtGui.QTextCursor): # Not using QSyntaxHighlighter due to the
             txt = self.document().toPlainText()
             self.document().blockSignals(True)
             for match in re.getMatches(pattern, txt):
+                # FIXME crashes in big files...  
                 strt, end = match.getIndexes()
                 self.setFormat(strt, end, self.pallete[i])
                 i += 1
@@ -71,6 +74,7 @@ class PyRexEdit(QtGui.QLineEdit):
 
     def shapeUp(self):
         self.setPlaceholderText("type your regex")
+
     def linkTo(self, doc):
         self.renoir = PyRexPainter(self, doc)
         self.textChanged.connect(self.renoir.highlight)
@@ -81,9 +85,110 @@ class PyRexTV(QtGui.QTableView):
         self.setup()
 
     def setup(self):
-        self.setModel(re.model)
+        #self.setReadOnly(True) # FIXME
+        self.model = self.ResultsModel(self)
+        re.setModel(self.model)
+        self.setModel(self.model)
         self.setCornerButtonEnabled(False)
         self.horizontalHeader().setStretchLastSection(True)
+        self.clicked.connect(self.onClick)
+
+    def linkTo(self, doc):
+        self.selector = self.Selersor(doc)
+
+    def onClick(self, index):
+        span = self.model.getSpan(index.row())
+        self.selector._select(span)
+
+    class Selersor(QtGui.QTextCursor): #TODO Maybe use the currsor I already have..??
+        def __init__(self, doc):
+            super(PyRexTV.Selersor, self).__init__(doc)
+
+        def _select(self, span):
+            self.setPosition(span[0], self.MoveAnchor)
+            self.setPosition(span[1], self.KeepAnchor)
+            # TODO FIX THIS !!!
+
+    class ResRow(object):
+        def __init__(self, data, color = QtGui.QColor(0xff0000), span=None):
+            self.index = data[0]
+            self.group = data[1]
+            self.color = color
+            self.span = span
+
+        def getGroup(self):
+            return self.group
+
+        def getIndex(self):
+            return self.index
+
+        def getColor(self):
+            return self.color
+
+        def getSpan(self):
+            return self.span
+
+    class ResultsModel(QtCore.QAbstractTableModel):
+        LBL = "GROUP"
+        rows = []
+        cols = 1
+
+        def __init__(self, parent = None):
+            super(PyRexTV.ResultsModel, self).__init__(parent)
+
+        def clear(self):
+            self.beginResetModel()
+            self.LBL = "GROUP"
+            self.rows=[]
+            self.endResetModel()
+
+        def showError(self, err):
+            self.beginResetModel()
+            self.LBL = "ERROR"
+            self.rows= [PyRexTV.ResRow([None, err])]
+            self.endResetModel()
+
+        def columnCount(self, index):
+            if index.isValid():
+                return 0
+            return self.cols
+
+        def rowCount(self, index):
+            if index.isValid():
+                return 0
+            return len(self.rows)
+
+        def data(self, index, role):
+            if not index.isValid():
+                return None
+            if not 0 <= index.row() < len(self.rows):
+                return None
+            if role == QtCore.Qt.DisplayRole:
+                return self.rows[index.row()].getGroup()
+            if role == QtCore.Qt.BackgroundColorRole:
+                return self.rows[index.row()].getColor()
+
+        def headerData(self, section, orientation, role):
+            if role == QtCore.Qt.DisplayRole:
+                if orientation == QtCore.Qt.Horizontal:
+                    return self.LBL
+                else:
+                    return self.rows[section].getIndex()
+            if role == QtCore.Qt.DisplayPropertyRole:
+                print("ok")
+            return None
+
+        def setMatches(self, matches):
+            c = 0
+            for match in matches:
+                i = 0;
+                for i in range(match.lastindex + 1):
+                    self.rows.append(PyRexTV.ResRow([i, match.group(i)], COLORS[c], match.span(i)))
+                c += 1
+                c = (c % 2)
+
+        def getSpan(self, index):
+            return self.rows[index].getSpan()
 
 class PyRexWid(QtGui.QMainWindow):
 
@@ -112,7 +217,7 @@ class PyRexWid(QtGui.QMainWindow):
 
     def getMenuBar(self):
         menuBar = self.menuBar()
-        menus=[ "&File", "&Edit", "&Help" ] #, "&Tools", "&View", "&Help"]
+        menus=[ "&File", "&Edit", "&Help" ] #XXX"&Libraries"XXX, "&Tools", "&View", "&Help"]
         for menu in menus:
             fileMenu = menuBar.addMenu(menu)
             for action in self.getMenuActions(menu):
@@ -150,11 +255,9 @@ class PyRexWid(QtGui.QMainWindow):
 
     def setUp(self):
         self.printDialog = None
-        #self.printer = None
         self.clipBoard = QtGui.QApplication.clipboard()
-        #self.results.setReadOnly(True) #TODO move this to __init__() if/when results becomes a class.
-        #re.setMonitor(self.results) # TODO REMOVE
         self.reditor.linkTo(self.rematch.document())
+        self.results.linkTo(self.rematch.document())# TODO call document() only once!
 
     def setSignals(self):
         self.retrieve.clicked.connect(self.updateClipBoard)

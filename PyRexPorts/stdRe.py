@@ -58,11 +58,11 @@ class StdRe(RELib):
         self.model.setMatches(mtchs)
         return mtchs
 
-    class PyRexMatch(object):
+    class PyRexMatch(RELib.REMatch):
         def __init__(self, match):
-            self.match = match
-            if match.lastindex:
-                self.lastindex = match.lastindex
+            super(StdRe.PyRexMatch, self).__init__(match)
+            if self.match.lastindex:
+                self.lastindex = self.match.lastindex
             else:
                 self.lastindex = 0
 
@@ -72,3 +72,5 @@ class StdRe(RELib):
         def getIndexes(self):
             return self.match.span()
 
+        def span(self, group = 0):
+            return self.match.span(group)
