@@ -52,7 +52,6 @@ class StdRe(RELib):
     def getMatches(self, regex, text):
         self.model.clear()
         mtchs = []
-        # TODO Dump the generator thing..
         for match in re.finditer(regex, text, self.insertFlags()):
             mtchs.append(self.PyRexMatch(match))
         self.model.setMatches(mtchs)

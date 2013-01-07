@@ -21,18 +21,22 @@ import sys, webbrowser
 from PySide import QtGui, QtCore
 from os.path import expanduser
 from urllib2 import urlopen, URLError
-from PyRexPorts import *
+from PyRExPorts import *
 
 re = RELib.__subclasses__()[0]() #TODO make it extendable already!!
 
-COLORS =[QtGui.QColor("Red"), QtGui.QColor("Blue")]
+COLORS =[QtGui.QColor("Red"), QtGui.QColor("Lime")]
 
-class PyRexPainter(QtGui.QTextCursor): # Not using QSyntaxHighlighter due to the need of multiline text blocks.
-    def __init__(self, reditor, doc):
-        super(PyRexPainter, self).__init__(doc)
-        self.document().contentsChange.connect(self.highlight)
+class PyRExPainter(object): # Not using QSyntaxHighlighter due to the need of multiline text blocks.
+    def __init__(self, reditor, rematch):
         self.reditor = reditor
+        self.rematch = rematch
+        self.document = rematch.document()
+        self.setup()
         self.initColorscheme()
+
+    def setup(self):
+        self.document.contentsChange.connect(self.highlight)
 
     def initColorscheme(self):
         self.default = QtGui.QTextCharFormat()
@@ -44,45 +48,112 @@ class PyRexPainter(QtGui.QTextCursor): # Not using QSyntaxHighlighter due to the
         self.unFormat()
         pattern = self.reditor.text()
         if re.check(pattern):
-            i = 0
-            txt = self.document().toPlainText()
-            self.document().blockSignals(True)
-            for match in re.getMatches(pattern, txt):
-                # FIXME crashes in big files... Use threads or something.
-                strt, end = match.getIndexes()
-                self.setFormat(strt, end, self.pallete[i])
-                i += 1
-                i = (i % 2)
-            self.document().blockSignals(False)
+            self.document.blockSignals(True)
+            self.rematch.busyState(True)
 
-    def setFormat(self, frm, to, form):
-        self.setPosition(frm, self.MoveAnchor)
-        self.setPosition(to, self.KeepAnchor)
-        self.setCharFormat(form)
+            self.brush = self.BrushThread(pattern, self.document.toPlainText())
+            self.brush.documentReady.connect(self.presentDocument, QtCore.Qt.QueuedConnection)
+            self.brush.start()
+
+    def presentDocument(self, document):
+        self.document = document
+        self.rematch.setDocument(self.document)
+        self.document.blockSignals(False)
+        self.rematch.busyState(False)
 
     def unFormat(self):
-        self.document().blockSignals(True)
-        self.select(self.Document)
-        self.setCharFormat(self.default)
-        self.document().blockSignals(False)
+        self.document.blockSignals(True)
+        cursor = self.rematch.textCursor()
+        cursor.select(cursor.Document)
+        cursor.setCharFormat(self.default)
+        self.document.blockSignals(False)
 
-class PyRexEdit(QtGui.QLineEdit):
-    HINT = "type your regex"
+    class BrushThread(QtCore.QThread):
+        documentReady = QtCore.Signal(QtGui.QTextDocument)
+
+        def __init__(self, pattern, txt, parent=None):
+            super(PyRExPainter.BrushThread, self).__init__(parent)
+            self.txt = txt
+            self.pattern = pattern
+            self.pallete=[QtGui.QTextCharFormat() for i in range(2)] # TWO TIMES !!! REMOVE !!
+            self.pallete[0].setBackground(COLORS[0])
+            self.pallete[1].setBackground(COLORS[1])
+
+        def run(self):
+            i = 0
+            self.doc = QtGui.QTextDocument(self.txt)
+            self.cursor = QtGui.QTextCursor(self.doc)
+            for match in re.getMatches(self.pattern, self.txt):
+                frm, to = match.getIndexes()
+                self.setFormat(frm, to, self.pallete[i])
+                i += 1
+                i = (i % 2)
+            type(self.doc)
+            self.documentReady.emit(self.doc)
+
+        def setFormat(self, frm, to, form):
+            self.cursor.setPosition(frm, self.cursor.MoveAnchor)
+            self.cursor.setPosition(to, self.cursor.KeepAnchor)
+            self.cursor.setCharFormat(form)
+
+class PyRExEdit(QtGui.QLineEdit):
+    PLACEHOLDER = "type your regex"
 
     def __init__(self, parent):
-        super(PyRexEdit, self).__init__(parent)
+        super(PyRExEdit, self).__init__(parent)
         self.shapeUp()
 
     def shapeUp(self):
-        self.setPlaceholderText(self.HINT)
+        self.setPlaceholderText(self.PLACEHOLDER)
 
-    def linkTo(self, doc):
-        self.renoir = PyRexPainter(self, doc)
+    def linkTo(self, rematch):
+        self.renoir = PyRExPainter(self, rematch)
         self.textChanged.connect(self.renoir.highlight)
 
-class PyRexTV(QtGui.QTableView):
+class PyRExMatchBox(QtGui.QTextEdit):
+    def __init__(self, parent = None):
+        super(PyRExMatchBox, self).__init__(parent)
+        self.initGui()
+        self.getContent() # TODO DELETE!!!
+
+    def initGui(self):
+        self.bbar = self.BusyBar(self)
+        overLay = QtGui.QHBoxLayout(self)
+        overLay.addSpacing(30)
+        overLay.addWidget(self.bbar)
+        overLay.addSpacing(30)
+        self.setLayout(overLay)
+        self.busyState(False)
+
+    def busyState(self, busy=True):
+        if busy:
+            self.bbar.reset()
+            self.bbar.show()
+            self.setEnabled(False)
+        else:
+            self.bbar.hide()
+            self.setEnabled(True)
+
+    def getContent(self): # TODO DELETE!!!
+        address = "http://textfiles.com/anarchy/201.txt"
+        try:
+            response = urlopen(address)
+            self.setPlainText(response.read())
+        except URLError as urlerr:
+            if hasattr(urlerr, 'reason'):
+                self.setPlainText(urlerr.reason)
+            else:
+                self.setPlainText(str(urlerr.code))
+
+    class BusyBar(QtGui.QProgressBar):
+        def __init__(self, parent=None):
+            super(PyRExMatchBox.BusyBar, self).__init__(parent)
+            self.setRange(0, 0)
+            self.setTextVisible(False)
+
+class PyRExTV(QtGui.QTableView):
     def __init__(self, parent):
-        super(PyRexTV, self).__init__(parent)
+        super(PyRExTV, self).__init__(parent)
         self.setup()
 
     def setup(self):
@@ -109,7 +180,7 @@ class PyRexTV(QtGui.QTableView):
         self.model.showError(error)
 
     class ResRow(object):
-        def __init__(self, data, color = QtGui.QColor(0xff0000), span=None):
+        def __init__(self, data, color = QtGui.QColor("Red"), span=None):
             self.index = data[0]
             self.group = data[1]
             self.color = color
@@ -128,23 +199,24 @@ class PyRexTV(QtGui.QTableView):
             return self.span
 
     class ResultsModel(QtCore.QAbstractTableModel):
-        LBL = "GROUP"
+        HEADER = LABEL = "GROUP"
+        ERROR = "ERROR"
         rows = []
         cols = 1
 
         def __init__(self, parent = None):
-            super(PyRexTV.ResultsModel, self).__init__(parent)
+            super(PyRExTV.ResultsModel, self).__init__(parent)
 
         def clear(self):
             self.beginResetModel()
-            self.LBL = "GROUP"
+            self.HEADER = self.LABEL
             self.rows=[]
             self.endResetModel()
 
         def showError(self, err):
             self.beginResetModel()
-            self.LBL = "ERROR"
-            self.rows= [PyRexTV.ResRow([None, err])]
+            self.HEADER = self.ERROR
+            self.rows= [PyRExTV.ResRow([None, err])]
             self.endResetModel()
 
         def columnCount(self, index):
@@ -170,11 +242,9 @@ class PyRexTV(QtGui.QTableView):
         def headerData(self, section, orientation, role):
             if role == QtCore.Qt.DisplayRole:
                 if orientation == QtCore.Qt.Horizontal:
-                    return self.LBL
+                    return self.HEADER
                 else:
                     return self.rows[section].getIndex()
-            if role == QtCore.Qt.DisplayPropertyRole:
-                print("ok")
             return None
 
         def setMatches(self, matches):
@@ -182,17 +252,17 @@ class PyRexTV(QtGui.QTableView):
             for match in matches:
                 i = 0;
                 for i in range(match.lastindex + 1):
-                    self.rows.append(PyRexTV.ResRow([i, match.group(i)], COLORS[c], match.span(i)))
+                    self.rows.append(PyRExTV.ResRow([i, match.group(i)], COLORS[c], match.span(i)))
                 c += 1
                 c = (c % 2)
 
         def getSpan(self, index):
             return self.rows[index].getSpan()
 
-class PyRexWid(QtGui.QMainWindow):
+class PyRExWid(QtGui.QMainWindow):
 
     def __init__(self):
-        super(PyRexWid, self).__init__(None)
+        super(PyRExWid, self).__init__(None)
         self.shapeUp()
 
     def shapeUp(self):
@@ -216,7 +286,7 @@ class PyRexWid(QtGui.QMainWindow):
 
     def getMenuBar(self):
         menuBar = self.menuBar()
-        menus=[ "&File", "&Edit", "&Help" ] #XXX"&Libraries"XXX, "&Tools", "&View", "&Help"]
+        menus=[ "&File", "&Edit", "&Help" ] #XXX"&Libraries"XXX, "&Tools", "&View"]
         for menu in menus:
             fileMenu = menuBar.addMenu(menu)
             for action in self.getMenuActions(menu):
@@ -228,11 +298,11 @@ class PyRexWid(QtGui.QMainWindow):
             toolBar.addAction(tool)
 
     def getContent(self):
-        self.reditor = PyRexEdit(self)
+        self.reditor = PyRExEdit(self)
         self.retrieve = QtGui.QPushButton(QtGui.QIcon.fromTheme("edit-copy",\
                                                 QtGui.QIcon('icons/edit-copy.png')), None)
-        self.rematch = QtGui.QTextEdit(self)
-        self.results = PyRexTV(self)
+        self.rematch = PyRExMatchBox(self) # QtGui.QTextEdit(self)
+        self.results = PyRExTV(self)
 
         top  = QtGui.QHBoxLayout()
         splt = QtGui.QSplitter(QtCore.Qt.Horizontal)
@@ -256,7 +326,7 @@ class PyRexWid(QtGui.QMainWindow):
     def setUp(self):
         self.printDialog = None
         self.clipBoard = QtGui.QApplication.clipboard()
-        self.reditor.linkTo(self.rematch.document())
+        self.reditor.linkTo(self.rematch)
         self.results.linkTo(self.rematch)
 
     def setSignals(self):
@@ -340,13 +410,13 @@ class PyRexWid(QtGui.QMainWindow):
                                  (("'document-new'", 'None', "'&New (clear)'"),("'Ctrl+N'",), ("'Clear the RE'",), ('self.newRe',)),
                                  (("'document-save-as'", 'None', "'&Save As'"),("'Ctrl+S'",), ("'Save RE as'",), ('self.fileSaveAs',)),
                                  (("'document-print'", 'None', "'&Print'"),("'Ctrl+P'",), ("'Print RE'",), ('self.printRe',)),
-                                 (("'application-exit'", 'None', "'&Quit'"),("'Ctrl+Q'",), ("'Exit PyRex'",), ('self.close',)) ],
+                                 (("'application-exit'", 'None', "'&Quit'"),("'Ctrl+Q'",), ("'Exit PyREx'",), ('self.close',)) ],
                      "&Edit" : [ (("'edit-undo'", 'None', "'&Undo'"),("'Ctrl+Z'",), ("'Undo'",), ('self.dummy',)),
                                  (("'edit-redo'", 'None', "'&Redo'"),("'Ctrl+Shift+Z'",), ("'Redo'",), ('self.dummy',)),
                                  (("'edit-cut'", 'None', "'Cu&t'"),("'Ctrl+X'",), ("'Cut'",), ('self.dummy',)),
                                  (("'edit-copy'", 'None', "'&Copy'"),("'Ctrl+C'",), ("'Copy'",), ('self.dummy',)),
                                  (("'edit-paste'", 'None', "'&Paste'"),("'Ctrl+V'",), ("'Paste'",), ('self.dummy',)) ],
-                     "&Help" : [ (("'help-content'", 'None', "'PyRex &Help'"),("'F1'",), ("'Help'",), ('self.dummy',)),
+                     "&Help" : [ (("'help-content'", 'None', "'PyREx &Help'"),("'F1'",), ("'Help'",), ('self.dummy',)),
                                  (("'help-license'", 'None', "'&License'"),("'Ctrl+L'",), ("'License Information'",), ('self.dummy',)),
                                  (("'help-visit'", 'None', "'Visit the Developer'"),("''",), ("'Visit www.stamoulohta.com'",), ('self.visitMe',)),
                                  (("'help-about'", 'None', "'&About'"),("'Ctrl+A'",), ("'About'",), ('self.dummy',)) ] }
@@ -364,7 +434,7 @@ class PyRexWid(QtGui.QMainWindow):
 def main():
     """Main function. Start of the program."""
     app = QtGui.QApplication(sys.argv)
-    pyrex = PyRexWid()
+    pyrex = PyRExWid()
     sys.exit(app.exec_())
 
 #======================================================================================================================#
