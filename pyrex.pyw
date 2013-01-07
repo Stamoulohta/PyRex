@@ -1,5 +1,5 @@
 #!/usr/bin/env python2
-# vim: fileencoding=utf-8:expandtab:tabstop=2:softtabstop=2:shiftwidth=2:
+# vim: fileencoding=utf-8:
 #======================================================================================================================#
 #
 # Copyright © 2012 George A Stamoulis (g.a.stamoulis@gmail.com)
@@ -17,13 +17,13 @@ edited  : 10/12/2012
 
 """
 
-import sys
+import sys, webbrowser
 from PySide import QtGui, QtCore
 from os.path import expanduser
 from urllib2 import urlopen, URLError
 from PyRexPorts import *
 
-re = RELib.__subclasses__()[0]()
+re = RELib.__subclasses__()[0]() #TODO make it extendable already!!
 
 COLORS =[QtGui.QColor("Red"), QtGui.QColor("Blue")]
 
@@ -48,7 +48,7 @@ class PyRexPainter(QtGui.QTextCursor): # Not using QSyntaxHighlighter due to the
             txt = self.document().toPlainText()
             self.document().blockSignals(True)
             for match in re.getMatches(pattern, txt):
-                # FIXME crashes in big files...  
+                # FIXME crashes in big files... Use threads or something.
                 strt, end = match.getIndexes()
                 self.setFormat(strt, end, self.pallete[i])
                 i += 1
@@ -67,13 +67,14 @@ class PyRexPainter(QtGui.QTextCursor): # Not using QSyntaxHighlighter due to the
         self.document().blockSignals(False)
 
 class PyRexEdit(QtGui.QLineEdit):
+    HINT = "type your regex"
 
     def __init__(self, parent):
         super(PyRexEdit, self).__init__(parent)
         self.shapeUp()
 
     def shapeUp(self):
-        self.setPlaceholderText("type your regex")
+        self.setPlaceholderText(self.HINT)
 
     def linkTo(self, doc):
         self.renoir = PyRexPainter(self, doc)
@@ -93,21 +94,19 @@ class PyRexTV(QtGui.QTableView):
         self.horizontalHeader().setStretchLastSection(True)
         self.clicked.connect(self.onClick)
 
-    def linkTo(self, doc):
-        self.selector = self.Selersor(doc)
+    def linkTo(self, rematch):
+        self.rematch = rematch
 
     def onClick(self, index):
         span = self.model.getSpan(index.row())
-        self.selector._select(span)
+        cur = self.rematch.textCursor()
+        if cur and span:
+            cur.setPosition(span[0], cur.MoveAnchor)
+            cur.setPosition(span[1], cur.KeepAnchor)
+            self.rematch.setTextCursor(cur)
 
-    class Selersor(QtGui.QTextCursor): #TODO Maybe use the currsor I already have..??
-        def __init__(self, doc):
-            super(PyRexTV.Selersor, self).__init__(doc)
-
-        def _select(self, span):
-            self.setPosition(span[0], self.MoveAnchor)
-            self.setPosition(span[1], self.KeepAnchor)
-            # TODO FIX THIS !!!
+    def showError(self, error):
+        self.model.showError(error)
 
     class ResRow(object):
         def __init__(self, data, color = QtGui.QColor(0xff0000), span=None):
@@ -207,7 +206,7 @@ class PyRexWid(QtGui.QMainWindow):
         self.setCentralWidget(self.getContent())
         self.setUp()
         self.setSignals()
-        self.show() 
+        self.show()
 
     def center(self):
         block = self.frameGeometry()
@@ -230,7 +229,8 @@ class PyRexWid(QtGui.QMainWindow):
 
     def getContent(self):
         self.reditor = PyRexEdit(self)
-        self.retrieve = QtGui.QPushButton(QtGui.QIcon.fromTheme("edit-copy"), None) #TODO give fallBack Icons as a second arg to fromTheme ;)
+        self.retrieve = QtGui.QPushButton(QtGui.QIcon.fromTheme("edit-copy",\
+                                                QtGui.QIcon('icons/edit-copy.png')), None)
         self.rematch = QtGui.QTextEdit(self)
         self.results = PyRexTV(self)
 
@@ -257,7 +257,7 @@ class PyRexWid(QtGui.QMainWindow):
         self.printDialog = None
         self.clipBoard = QtGui.QApplication.clipboard()
         self.reditor.linkTo(self.rematch.document())
-        self.results.linkTo(self.rematch.document())# TODO call document() only once!
+        self.results.linkTo(self.rematch)
 
     def setSignals(self):
         self.retrieve.clicked.connect(self.updateClipBoard)
@@ -292,18 +292,20 @@ class PyRexWid(QtGui.QMainWindow):
         self.reditor.clear()
 
     def urlOpen(self):#XXX give it some polish..!
-        address, ok =  QtGui.QInputDialog.getText(self, "Open URL", "Enter url:")
+        urlDialog = QtGui.QInputDialog()
+        urlDialog.resize(800, 300) # FIXME does not work!
+        address, ok = urlDialog.getText(self, "Open URL", "Enter url:")
         if ok and address:
             if not address.startswith(("http://", "https://", "file://")):
                 address = "http://"+address
             try:
                 response = urlopen(address)
                 self.rematch.setPlainText(response.read())
-            except URLError as verr:
-                if hasattr(verr, 'reason'):
-                    self.results.setPlainText(str(verr.reason))
+            except URLError as urlerr:
+                if hasattr(urlerr, 'reason'):
+                    self.results.showError(str(urlerr.reason))
                 else:
-                    self.serults.setPlainText(str(cerr.code))
+                    self.results.showError(str(urlerr.code))
 
     def fileSaveAs(self):
         # TODO either save the file human readable or with pickle.
@@ -318,6 +320,10 @@ class PyRexWid(QtGui.QMainWindow):
         if self.printDialog.exec_() == QtGui.QDialog.Accepted:
             doc = QtGui.QTextDocument(self.reditor.text(), self)
             doc.print_(self.printDialog.printer())
+
+    def visitMe(self):
+        url = "http://www.stamoulohta.com"
+        webbrowser.open_new_tab(url)
 
     def dummy(self):
         print("you are dummy 8*!")
@@ -342,7 +348,7 @@ class PyRexWid(QtGui.QMainWindow):
                                  (("'edit-paste'", 'None', "'&Paste'"),("'Ctrl+V'",), ("'Paste'",), ('self.dummy',)) ],
                      "&Help" : [ (("'help-content'", 'None', "'PyRex &Help'"),("'F1'",), ("'Help'",), ('self.dummy',)),
                                  (("'help-license'", 'None', "'&License'"),("'Ctrl+L'",), ("'License Information'",), ('self.dummy',)),
-                                 (("'help-visit'", 'None', "'Visit Stamoulohta.com'"),("''",), ("'Visit the Developer'",), ('self.dummy',)),
+                                 (("'help-visit'", 'None', "'Visit the Developer'"),("''",), ("'Visit www.stamoulohta.com'",), ('self.visitMe',)),
                                  (("'help-about'", 'None', "'&About'"),("'Ctrl+A'",), ("'About'",), ('self.dummy',)) ] }
         menuActions["toolBar"] =  [ menuActions["&File"][2], menuActions["&File"][0], menuActions["&File"][1], menuActions["&File"][3],
                                     menuActions["&File"][4], menuActions["&Edit"][0], menuActions["&Edit"][1], menuActions["&Edit"][2],
