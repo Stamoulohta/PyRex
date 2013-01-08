@@ -7,10 +7,13 @@ Describe and comment the code...
 from PySide import QtCore, QtGui
 
 class UrlDialog(QtGui.QWidget):
+    """Custom dialog for url input."""
+
     RESULTS = (None, False)
     WWW = "www."
 
     def __init__(self, parent=None):
+        """Class constructor."""
         super(UrlDialog, self).__init__(parent, QtCore.Qt.Dialog)
         self.setWindowTitle("Open URL")
         self.resize(500, 100)
@@ -18,6 +21,7 @@ class UrlDialog(QtGui.QWidget):
         self.setup()
 
     def initGui(self):
+        """Creates and aranges the dialog widgets."""
         label = QtGui.QLabel("Enter url:", self)
         # referenced widgets.
         self.combo = self.ProtocolComboBox(self)
@@ -46,11 +50,13 @@ class UrlDialog(QtGui.QWidget):
         self.setLayout(vertical)
 
     def setup(self):
+        """Connects signals and slots as needed."""
         self.txt.returnPressed.connect(self.urlCheck)
         self.ok.clicked.connect(self.urlCheck)
         self.cancel.clicked.connect(self.cancelDialog)
 
     def getUrl(self):
+        """Shows the dialog and enters event loop."""
         self.show()
         self.txt.setFocus()
         self.eventLoop = QtCore.QEventLoop(self)
@@ -59,10 +65,12 @@ class UrlDialog(QtGui.QWidget):
         return self.RESULTS
 
     def cancelDialog(self):
+        """Resets the results to be returned and exits the event loop."""
         self.RESULTS = (None, False)
         self.eventLoop.exit()
 
     def urlCheck(self):
+        """Validates url and exits event loop."""
         userinput = self.txt.text()
         if userinput in self.WWW:
             return
@@ -71,11 +79,16 @@ class UrlDialog(QtGui.QWidget):
             self.eventLoop.exit()
 
     class ProtocolComboBox(QtGui.QComboBox):
-        def __init__(self, parent=None):
-            super(UrlDialog.ProtocolComboBox, self).__init__(parent)
-            for item in ["http://", "https://", "file://", "ftp://", "ftps://", "script://"]:
-                self.addItem(item)
+        """Extends QComboBox."""
 
+        def __init__(self, parent=None):
+            """Class constructor."""
+            super(UrlDialog.ProtocolComboBox, self).__init__(parent)
+            for scheme in ["http://", "https://", "file://", "ftp://", "ftps://", "script://"]:
+                self.addItem(scheme)
+
+class FileDialog(QtGui.QFileDialog): # FIXME dialog start/close messages.
+    """Custom dialog for file input."""
 
 #======================================================================================================================#
 def main():
