@@ -18,6 +18,7 @@ edited  : 10/12/2012
 """
 
 import sys, webbrowser
+from Dialogs import UrlDialog
 from PySide import QtGui, QtCore
 from os.path import expanduser
 from urllib2 import urlopen, URLError
@@ -27,16 +28,17 @@ re = RELib.__subclasses__()[0]() #TODO make it extendable already!!
 
 COLORS =[QtGui.QColor("Red"), QtGui.QColor("Lime")]
 
-class PyRExPainter(object): # Not using QSyntaxHighlighter due to the need of multiline text blocks.
+class PyRExPainter(QtGui.QTextCursor): # Not using QSyntaxHighlighter due to the need of multiline text blocks.
+    PAINTING = False
+    STOP     = False
+
     def __init__(self, reditor, rematch):
+        super(PyRExPainter, self).__init__(rematch.document())
+        self.document().contentsChanged.connect(self.enqueue)
+        self.queue = self.Enqueuer(self)
         self.reditor = reditor
         self.rematch = rematch
-        self.document = rematch.document()
-        self.setup()
         self.initColorscheme()
-
-    def setup(self):
-        self.document.contentsChange.connect(self.highlight)
 
     def initColorscheme(self):
         self.default = QtGui.QTextCharFormat()
@@ -44,57 +46,67 @@ class PyRExPainter(object): # Not using QSyntaxHighlighter due to the need of mu
         self.pallete[0].setBackground(COLORS[0])
         self.pallete[1].setBackground(COLORS[1])
 
-    def highlight(self):
+    def begin(self):
+        self.STOP = False
         self.unFormat()
+        self.pain_t()
+
+    def enqueue(self):
+        while self.queue.isRunning():
+            pass
+        self.queue = self.Enqueuer(self)
+        self.queue.Stopped.connect(self.begin)
+        self.queue.start()
+
+    def pain_t(self):
+        self.PAINTING = True
         pattern = self.reditor.text()
         if re.check(pattern):
-            self.document.blockSignals(True)
-            self.rematch.busyState(True)
+            self.document().blockSignals(True)          # We're missing the signals from PyRExMatchBox
+            self.rematch.busyState(True)                # when we pain_t ..and we can't help it. ;)
+            i = 0
+            txt = self.document().toPlainText()
+            matches = re.getMatches(pattern, txt)
+            self.rematch.setBBarRange(len(matches))
+            for num, match in enumerate(matches):
+                QtCore.QCoreApplication.processEvents() # FIXME if application Exits, this doesn't stop.
+                self.rematch.setBBarValue(num)
+                if not self.STOP:
+                    frm, to = match.getIndexes()
+                    self.setFormat(frm, to, self.pallete[i])
+                    i += 1
+                    i = (i % 2)
+                elif self.STOP:
+                    break
+            self.document().blockSignals(False)
+            self.rematch.busyState(False)
+        self.PAINTING = False
+        self.STOP = False
 
-            self.brush = self.BrushThread(pattern, self.document.toPlainText())
-            self.brush.documentReady.connect(self.presentDocument, QtCore.Qt.QueuedConnection)
-            self.brush.start()
-
-    def presentDocument(self, document):
-        self.document = document
-        self.rematch.setDocument(self.document)
-        self.document.blockSignals(False)
-        self.rematch.busyState(False)
+    def setFormat(self, frm, to, form):
+        self.setPosition(frm, self.MoveAnchor)
+        self.setPosition(to,  self.KeepAnchor)
+        self.setCharFormat(form)
 
     def unFormat(self):
-        self.document.blockSignals(True)
-        cursor = self.rematch.textCursor()
-        cursor.select(cursor.Document)
-        cursor.setCharFormat(self.default)
-        self.document.blockSignals(False)
+        self.document().blockSignals(True)
+        self.select(self.Document)
+        self.setCharFormat(self.default)
+        self.document().blockSignals(False)
 
-    class BrushThread(QtCore.QThread):
-        documentReady = QtCore.Signal(QtGui.QTextDocument)
+    class Enqueuer(QtCore.QThread):
+        Stopped = QtCore.Signal()
 
-        def __init__(self, pattern, txt, parent=None):
-            super(PyRExPainter.BrushThread, self).__init__(parent)
-            self.txt = txt
-            self.pattern = pattern
-            self.pallete=[QtGui.QTextCharFormat() for i in range(2)] # TWO TIMES !!! REMOVE !!
-            self.pallete[0].setBackground(COLORS[0])
-            self.pallete[1].setBackground(COLORS[1])
+        def __init__(self, outer, parent=None):
+            super(PyRExPainter.Enqueuer, self).__init__(parent)
+            self.outer = outer
+            if self.outer.PAINTING:
+                self.outer.STOP = True
 
         def run(self):
-            i = 0
-            self.doc = QtGui.QTextDocument(self.txt)
-            self.cursor = QtGui.QTextCursor(self.doc)
-            for match in re.getMatches(self.pattern, self.txt):
-                frm, to = match.getIndexes()
-                self.setFormat(frm, to, self.pallete[i])
-                i += 1
-                i = (i % 2)
-            type(self.doc)
-            self.documentReady.emit(self.doc)
-
-        def setFormat(self, frm, to, form):
-            self.cursor.setPosition(frm, self.cursor.MoveAnchor)
-            self.cursor.setPosition(to, self.cursor.KeepAnchor)
-            self.cursor.setCharFormat(form)
+            while self.outer.STOP:
+                pass
+            self.Stopped.emit()
 
 class PyRExEdit(QtGui.QLineEdit):
     PLACEHOLDER = "type your regex"
@@ -108,47 +120,45 @@ class PyRExEdit(QtGui.QLineEdit):
 
     def linkTo(self, rematch):
         self.renoir = PyRExPainter(self, rematch)
-        self.textChanged.connect(self.renoir.highlight)
+        self.textChanged.connect(self.renoir.enqueue)
 
 class PyRExMatchBox(QtGui.QTextEdit):
     def __init__(self, parent = None):
         super(PyRExMatchBox, self).__init__(parent)
         self.initGui()
-        self.getContent() # TODO DELETE!!!
 
     def initGui(self):
         self.bbar = self.BusyBar(self)
-        overLay = QtGui.QHBoxLayout(self)
-        overLay.addSpacing(30)
-        overLay.addWidget(self.bbar)
-        overLay.addSpacing(30)
-        self.setLayout(overLay)
+        overLay_h = QtGui.QHBoxLayout()
+        overLay_h.addSpacing(30)
+        overLay_h.addWidget(self.bbar)
+        overLay_h.addSpacing(30)
+        overLay_v = QtGui.QVBoxLayout(self)
+        overLay_v.addStretch(1)
+        overLay_v.addLayout(overLay_h)
+        self.setLayout(overLay_v)
         self.busyState(False)
 
     def busyState(self, busy=True):
         if busy:
             self.bbar.reset()
             self.bbar.show()
-            self.setEnabled(False)
         else:
             self.bbar.hide()
-            self.setEnabled(True)
+        self.setReadOnly(busy)
 
-    def getContent(self): # TODO DELETE!!!
-        address = "http://textfiles.com/anarchy/201.txt"
-        try:
-            response = urlopen(address)
-            self.setPlainText(response.read())
-        except URLError as urlerr:
-            if hasattr(urlerr, 'reason'):
-                self.setPlainText(urlerr.reason)
-            else:
-                self.setPlainText(str(urlerr.code))
+    def setBBarValue(self, value):
+        self.bbar.setValue(value)
+
+    def setBBarRange(self, maximum):
+        self.bbar.setRange(0, maximum)
 
     class BusyBar(QtGui.QProgressBar):
         def __init__(self, parent=None):
             super(PyRExMatchBox.BusyBar, self).__init__(parent)
-            self.setRange(0, 0)
+            effect = QtGui.QGraphicsOpacityEffect(self)
+            effect.setOpacity(0.7)
+            self.setGraphicsEffect(effect)
             self.setTextVisible(False)
 
 class PyRExTV(QtGui.QTableView):
@@ -157,7 +167,6 @@ class PyRExTV(QtGui.QTableView):
         self.setup()
 
     def setup(self):
-        #self.setReadOnly(True) # FIXME
         self.model = self.ResultsModel(self)
         re.setModel(self.model)
         self.setModel(self.model)
@@ -251,7 +260,7 @@ class PyRExTV(QtGui.QTableView):
             c = 0
             for match in matches:
                 i = 0;
-                for i in range(match.lastindex + 1):
+                for i in range(match.lastindex + 1): # TODO named groups.
                     self.rows.append(PyRExTV.ResRow([i, match.group(i)], COLORS[c], match.span(i)))
                 c += 1
                 c = (c % 2)
@@ -345,29 +354,26 @@ class PyRExWid(QtGui.QMainWindow):
         key = cbox.text()
         val = QtCore.Qt.CheckState.Checked == cbox.checkState()
         re.setFlag(key, val)
-        self.reditor.renoir.highlight()
+        self.reditor.renoir.enqueue()
 
 
     def updateClipBoard(self):
         self.clipBoard.setText(self.reditor.text(), QtGui.QClipboard.Clipboard)
         self.clipBoard.setText(self.reditor.text(), QtGui.QClipboard.Selection)
 
-    def fileOpen(self):#XXX give it some polish..!
-        fileName = QtGui.QFileDialog.getOpenFileName(self, "Open File", expanduser("~"))[0]
-        if fileName:
-            with open(fileName, "r") as f:
-                self.rematch.setText(f.read())
-
     def newRe(self):
         self.reditor.clear()
 
-    def urlOpen(self):#XXX give it some polish..!
-        urlDialog = QtGui.QInputDialog()
-        urlDialog.resize(800, 300) # FIXME does not work!
-        address, ok = urlDialog.getText(self, "Open URL", "Enter url:")
+    def fileOpen(self):
+        fileName, ok = QtGui.QFileDialog.getOpenFileName(self, "Open File", expanduser("~"))
+        if ok and fileName:
+            with open(fileName, "r") as f:
+                self.rematch.setText(f.read())
+
+    def urlOpen(self):
+        urlDialog = UrlDialog(self)
+        address, ok = urlDialog.getUrl()
         if ok and address:
-            if not address.startswith(("http://", "https://", "file://")):
-                address = "http://"+address
             try:
                 response = urlopen(address)
                 self.rematch.setPlainText(response.read())
@@ -377,25 +383,12 @@ class PyRExWid(QtGui.QMainWindow):
                 else:
                     self.results.showError(str(urlerr.code))
 
-    def fileSaveAs(self):
-        # TODO either save the file human readable or with pickle.
-        print("will save it for tomorrow !:)")
-
-    def printRe(self):
-        if not self.printDialog:
-            printer = QtGui.QPrinter(QtGui.QPrinter.ScreenResolution)
-            printer.setOutputFileName("regexp.pdf")
-            self.printDialog = QtGui.QPrintDialog(printer, self) #FIXME enable output file, name, type etc...
-            self.printDialog.setOptions(QtGui.QAbstractPrintDialog.PrintToFile)
-        if self.printDialog.exec_() == QtGui.QDialog.Accepted:
-            doc = QtGui.QTextDocument(self.reditor.text(), self)
-            doc.print_(self.printDialog.printer())
-
     def visitMe(self):
         url = "http://www.stamoulohta.com"
         webbrowser.open_new_tab(url)
 
     def dummy(self):
+        """Dummy function"""
         print("you are dummy 8*!")
 
     def getMenuActions(self, menu):
@@ -408,21 +401,20 @@ class PyRExWid(QtGui.QMainWindow):
         menuActions={"&File" : [ (("'document-open'", 'None', "'&Open File'"),("'Ctrl+O'",), ("'Open a File'",), ('self.fileOpen',)),
                                  (("'insert-link'", 'None', "'Open &Url'"),("'Ctrl+U'",), ("'Open Url'",), ('self.urlOpen',)),
                                  (("'document-new'", 'None', "'&New (clear)'"),("'Ctrl+N'",), ("'Clear the RE'",), ('self.newRe',)),
-                                 (("'document-save-as'", 'None', "'&Save As'"),("'Ctrl+S'",), ("'Save RE as'",), ('self.fileSaveAs',)),
-                                 (("'document-print'", 'None', "'&Print'"),("'Ctrl+P'",), ("'Print RE'",), ('self.printRe',)),
+                                 #(("'document-save-as'", 'None', "'&Save As'"),("'Ctrl+S'",), ("'Save RE as'",), ('self.fileSaveAs',)),
+                                 #(("'document-print'", 'None', "'&Print'"),("'Ctrl+P'",), ("'Print RE'",), ('self.printRe',)),
                                  (("'application-exit'", 'None', "'&Quit'"),("'Ctrl+Q'",), ("'Exit PyREx'",), ('self.close',)) ],
                      "&Edit" : [ (("'edit-undo'", 'None', "'&Undo'"),("'Ctrl+Z'",), ("'Undo'",), ('self.dummy',)),
-                                 (("'edit-redo'", 'None', "'&Redo'"),("'Ctrl+Shift+Z'",), ("'Redo'",), ('self.dummy',)),
-                                 (("'edit-cut'", 'None', "'Cu&t'"),("'Ctrl+X'",), ("'Cut'",), ('self.dummy',)),
-                                 (("'edit-copy'", 'None', "'&Copy'"),("'Ctrl+C'",), ("'Copy'",), ('self.dummy',)),
-                                 (("'edit-paste'", 'None', "'&Paste'"),("'Ctrl+V'",), ("'Paste'",), ('self.dummy',)) ],
+                                 (("'edit-redo'", 'None', "'&Redo'"),("'Ctrl+Shift+Z'",), ("'Redo'",), ('self.dummy',)) ],
+                                 #(("'edit-cut'", 'None', "'Cu&t'"),("'Ctrl+X'",), ("'Cut'",), ('self.dummy',)),
+                                 #(("'edit-copy'", 'None', "'&Copy'"),("'Ctrl+C'",), ("'Copy'",), ('self.dummy',)),
+                                 #(("'edit-paste'", 'None', "'&Paste'"),("'Ctrl+V'",), ("'Paste'",), ('self.dummy',)) ],
                      "&Help" : [ (("'help-content'", 'None', "'PyREx &Help'"),("'F1'",), ("'Help'",), ('self.dummy',)),
                                  (("'help-license'", 'None', "'&License'"),("'Ctrl+L'",), ("'License Information'",), ('self.dummy',)),
                                  (("'help-visit'", 'None', "'Visit the Developer'"),("''",), ("'Visit www.stamoulohta.com'",), ('self.visitMe',)),
                                  (("'help-about'", 'None', "'&About'"),("'Ctrl+A'",), ("'About'",), ('self.dummy',)) ] }
-        menuActions["toolBar"] =  [ menuActions["&File"][2], menuActions["&File"][0], menuActions["&File"][1], menuActions["&File"][3],
-                                    menuActions["&File"][4], menuActions["&Edit"][0], menuActions["&Edit"][1], menuActions["&Edit"][2],
-                                    menuActions["&Edit"][3], menuActions["&Edit"][4] ]
+        menuActions["toolBar"] =  [ menuActions["&File"][2], menuActions["&File"][0], menuActions["&File"][1],
+                                    menuActions["&Edit"][0], menuActions["&Edit"][1] ]
 
         for x, act in enumerate(menuActions[menu]):
             for y, arg in enumerate(act):
